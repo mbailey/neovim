@@ -1,0 +1,19 @@
+{
+  "name": "neovim",
+  "metadata": {
+    "description": "Neovim remote control and socket management for AI agents in tmux environments",
+    "version": "1.0.0"
+  },
+  "owner": {
+    "name": "Mike Bailey",
+    "email": "mike@failmode.com"
+  },
+  "plugins": [
+    {
+      "name": "neovim",
+      "description": "Remote control Neovim instances via socket-based communication. Discover sockets, open files at specific lines, navigate, search, and query editor status -- all from AI agents without Python dependencies.",
+      "source": "./",
+      "category": "developer-tools"
+    }
+  ]
+}
