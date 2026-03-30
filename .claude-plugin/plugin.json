@@ -1,0 +1,10 @@
+{
+  "name": "neovim",
+  "description": "Neovim remote control and socket management for AI agents in tmux environments",
+  "version": "1.0.0",
+  "author": {
+    "name": "Mike Bailey",
+    "email": "mike@failmode.com"
+  },
+  "skills": "./skills"
+}
