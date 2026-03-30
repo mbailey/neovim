@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+set -o nounset -o pipefail -o errexit
+
+# nvim-remote - Control remote Neovim instances via socket
+
+show_help() {
+  cat <<EOF
+Usage: nvim-remote <command> [OPTIONS]
+
+Control remote Neovim instances via socket.
+
+Commands:
+  edit <file> [line]     Open file, optionally at specific line
+  goto <line>            Jump to line number in current file
+  search <pattern>       Search for pattern and highlight matches
+  status                 Get current Neovim instance status
+
+Options:
+  -s, --socket PATH      Socket path (default: auto-detect)
+  -h, --help             Show this help message
+
+Socket Auto-Detection:
+  If --socket is not specified, uses nvim-socket auto to find best socket.
+  You can also set NVIM_SOCKET_PATH environment variable.
+
+Examples:
+  nvim-remote edit file.txt              # Open file.txt
+  nvim-remote edit file.txt 42           # Open file.txt at line 42
+  nvim-remote goto 100                   # Jump to line 100
+  nvim-remote search "TODO"              # Search for TODO
+  nvim-remote status                     # Show current status
+
+  # With explicit socket
+  nvim-remote -s /tmp/nvim-tmux-pane-15 edit file.txt
+
+Commands use nvim --server for remote control, providing CLI
+alternatives to pynvim-based operations.
+EOF
+}
+
+# Get socket path (from argument, env var, or auto-detect)
+get_socket_path() {
+  local socket_path="${1:-}"
+
+  if [[ -n "$socket_path" ]]; then
+    echo "$socket_path"
+    return 0
+  fi
+
+  # Check environment variable
+  if [[ -n "${NVIM_SOCKET_PATH:-}" ]]; then
+    echo "$NVIM_SOCKET_PATH"
+    return 0
+  fi
+
+  # Auto-detect using nvim-socket
+  if command -v nvim-socket >/dev/null 2>&1; then
+    local auto_socket
+    auto_socket=$(nvim-socket auto 2>/dev/null)
+    if [[ -n "$auto_socket" ]]; then
+      echo "$auto_socket"
+      return 0
+    fi
+  fi
+
+  echo "Error: No socket found. Use --socket or set NVIM_SOCKET_PATH" >&2
+  return 1
+}
+
+# Verify socket exists
+verify_socket() {
+  local socket_path="$1"
+
+  if [[ ! -S "$socket_path" ]]; then
+    echo "Error: Socket does not exist: $socket_path" >&2
+    return 1
+  fi
+}
+
+# Execute remote expression
+remote_expr() {
+  local socket="$1"
+  local expr="$2"
+
+  nvim --server "$socket" --remote-expr "$expr" 2>/dev/null
+}
+
+# Send keys to remote instance
+remote_send() {
+  local socket="$1"
+  local keys="$2"
+
+  nvim --server "$socket" --remote-send "$keys" 2>/dev/null
+}
+
+# Edit command: Open file at optional line
+cmd_edit() {
+  local socket="$1"
+  local file="$2"
+  local line="${3:-}"
+
+  if [[ ! -f "$file" ]]; then
+    echo "Error: File not found: $file" >&2
+    return 1
+  fi
+
+  # Get absolute path
+  local abs_file
+  abs_file=$(realpath "$file")
+
+  # Open the file
+  nvim --server "$socket" --remote "$abs_file" 2>/dev/null
+
+  if [[ -n "$line" ]]; then
+    # Jump to specific line after opening
+    remote_send "$socket" ":${line}<CR>"
+    echo "Opened $abs_file at line $line"
+  else
+    echo "Opened $abs_file"
+  fi
+}
+
+# Goto command: Jump to line in current file
+cmd_goto() {
+  local socket="$1"
+  local line="$2"
+
+  if [[ ! "$line" =~ ^[0-9]+$ ]]; then
+    echo "Error: Line must be a number" >&2
+    return 1
+  fi
+
+  # Send goto command
+  remote_send "$socket" ":${line}<CR>"
+  echo "Jumped to line $line"
+}
+
+# Search command: Search and highlight pattern
+cmd_search() {
+  local socket="$1"
+  local pattern="$2"
+
+  # Escape special characters for vim search
+  # Note: / needs to be escaped in the pattern
+  local escaped_pattern="${pattern//\//\\/}"
+
+  # Send search command
+  remote_send "$socket" "/${escaped_pattern}<CR>"
+  echo "Searched for: $pattern"
+}
+
+# Status command: Get current status
+cmd_status() {
+  local socket="$1"
+
+  # Get current file
+  local current_file
+  current_file=$(remote_expr "$socket" "expand('%:p')")
+
+  # Get cursor position
+  local line
+  line=$(remote_expr "$socket" "line('.')")
+
+  local col
+  col=$(remote_expr "$socket" "col('.')")
+
+  # Get mode
+  local mode
+  mode=$(remote_expr "$socket" "mode()")
+
+  # Get modified status
+  local modified
+  modified=$(remote_expr "$socket" "&modified")
+
+  # Get filetype
+  local filetype
+  filetype=$(remote_expr "$socket" "&filetype")
+
+  # Get line count
+  local line_count
+  line_count=$(remote_expr "$socket" "line('$')")
+
+  # Display status
+  echo "Socket: $socket"
+  echo "File: ${current_file:-[No Name]}"
+  echo "Position: line $line, column $col"
+  echo "Mode: $mode"
+  echo "Modified: $modified"
+  echo "Filetype: ${filetype:-none}"
+  echo "Lines: $line_count"
+}
+
+# Main command dispatcher
+main() {
+  local socket_path=""
+  local command=""
+  local args=()
+
+  # Parse global options and command
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -s|--socket)
+        socket_path="$2"
+        shift 2
+        ;;
+      -h|--help|help)
+        show_help
+        exit 0
+        ;;
+      edit|goto|search|status)
+        command="$1"
+        shift
+        # Remaining args are command arguments
+        args=("$@")
+        break
+        ;;
+      *)
+        echo "Unknown option or command: $1" >&2
+        echo "Run 'nvim-remote --help' for usage information" >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ -z "$command" ]]; then
+    show_help
+    exit 1
+  fi
+
+  # Get socket path
+  local socket
+  socket=$(get_socket_path "$socket_path") || exit 1
+
+  # Verify socket exists
+  verify_socket "$socket" || exit 1
+
+  # Dispatch to command
+  case "$command" in
+    edit)
+      if [[ ${#args[@]} -lt 1 ]]; then
+        echo "Error: edit requires file argument" >&2
+        exit 1
+      fi
+      cmd_edit "$socket" "${args[@]}"
+      ;;
+    goto)
+      if [[ ${#args[@]} -lt 1 ]]; then
+        echo "Error: goto requires line number" >&2
+        exit 1
+      fi
+      cmd_goto "$socket" "${args[0]}"
+      ;;
+    search)
+      if [[ ${#args[@]} -lt 1 ]]; then
+        echo "Error: search requires pattern" >&2
+        exit 1
+      fi
+      cmd_search "$socket" "${args[0]}"
+      ;;
+    status)
+      cmd_status "$socket"
+      ;;
+    *)
+      echo "Unknown command: $command" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Execute if script is not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

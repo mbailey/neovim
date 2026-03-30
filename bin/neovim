@@ -1,0 +1,235 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["click>=8.0.0"]
+# ///
+"""
+Neovim package management and utilities.
+
+This dispatcher provides subcommands for managing Neovim configuration,
+LSP servers, and related tools.
+"""
+import click
+import subprocess
+import sys
+from pathlib import Path
+
+
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.version_option(version="1.0.0", prog_name="neovim")
+def cli():
+    """Neovim package management and utilities."""
+    pass
+
+
+@cli.group(context_settings={"help_option_names": ["-h", "--help"]})
+def lsp():
+    """Language Server Protocol (LSP) management."""
+    pass
+
+
+@lsp.command()
+def check():
+    """Check LSP installation and configuration.
+
+    Verifies:
+    - LSP is configured in Neovim
+    - Mason is installed
+    - Which language servers are installed
+    """
+    click.echo("🔍 Checking Neovim LSP configuration...\n")
+
+    # Check if nvim is installed
+    if not subprocess.run(["which", "nvim"], capture_output=True).returncode == 0:
+        click.echo("❌ Neovim is not installed", err=True)
+        return 1
+
+    click.echo("✅ Neovim is installed")
+
+    # Check for LazyVim
+    lazyvim_config = Path.home() / ".config" / "nvim" / "lua" / "config" / "lazy.lua"
+    if lazyvim_config.exists():
+        click.echo("✅ LazyVim configuration found")
+    else:
+        click.echo("⚠️  LazyVim configuration not found")
+
+    # Check Mason installation
+    mason_dir = Path.home() / ".local" / "share" / "nvim" / "mason"
+    if mason_dir.exists():
+        click.echo("✅ Mason is installed")
+
+        # List installed language servers
+        bin_dir = mason_dir / "bin"
+        if bin_dir.exists():
+            lsp_servers = [f.name for f in bin_dir.iterdir()
+                          if f.is_file() or f.is_symlink()]
+            if lsp_servers:
+                click.echo(f"\n📦 Installed language servers ({len(lsp_servers)}):")
+                for server in sorted(lsp_servers):
+                    click.echo(f"   • {server}")
+            else:
+                click.echo("\n⚠️  No language servers installed")
+        else:
+            click.echo("⚠️  Mason bin directory not found")
+    else:
+        click.echo("❌ Mason is not installed")
+        click.echo("\n💡 Install Mason through Neovim:")
+        click.echo("   :Lazy")
+        click.echo("   (search for mason.nvim)")
+
+    # Check for Pyright specifically
+    pyright_bin = mason_dir / "bin" / "pyright-langserver"
+    if pyright_bin.exists():
+        click.echo("\n✅ Pyright (Python LSP) is installed")
+    else:
+        click.echo("\n⚠️  Pyright (Python LSP) not found")
+        click.echo("💡 Install with: neovim lsp install pyright")
+
+    # Provide next steps
+    click.echo("\n📚 Documentation:")
+    click.echo("   neovim docs lsp    # View LSP code navigation guide")
+
+    return 0
+
+
+@lsp.command()
+@click.argument('server', default='pyright')
+def install(server):
+    """Install a language server via Mason.
+
+    SERVER: Language server name (default: pyright)
+
+    Examples:
+        neovim lsp install pyright
+        neovim lsp install typescript-language-server
+    """
+    click.echo(f"📦 Installing {server} via Mason...\n")
+
+    # Check if nvim is installed
+    if not subprocess.run(["which", "nvim"], capture_output=True).returncode == 0:
+        click.echo("❌ Neovim is not installed", err=True)
+        return 1
+
+    # Try headless installation first
+    click.echo("Attempting headless installation...")
+    try:
+        result = subprocess.run(
+            ["nvim", "--headless", "-c", f"MasonInstall {server}", "-c", "qall"],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        if result.returncode == 0:
+            click.echo(f"✅ {server} installed successfully")
+            click.echo(f"\n💡 Verify with: neovim lsp check")
+            return 0
+        else:
+            click.echo(f"⚠️  Headless installation failed")
+    except subprocess.TimeoutExpired:
+        click.echo("⏱️  Installation timed out")
+    except Exception as e:
+        click.echo(f"❌ Error: {e}")
+
+    # Fall back to manual instructions
+    click.echo("\n💡 Please install manually:")
+    click.echo("   1. Open Neovim")
+    click.echo("   2. Type: :Mason")
+    click.echo(f"   3. Search for '{server}'")
+    click.echo("   4. Press 'i' to install")
+    click.echo(f"\n   Or run in Neovim: :MasonInstall {server}")
+
+    return 0
+
+
+@lsp.command()
+def status():
+    """Show LSP status for current Neovim session.
+
+    Note: This requires an active Neovim session.
+    """
+    click.echo("💡 To check LSP status:")
+    click.echo("   1. Open a file in Neovim")
+    click.echo("   2. Type: :LspInfo")
+    click.echo("\nThis shows which language servers are attached to the current buffer.")
+
+
+@cli.group(context_settings={"help_option_names": ["-h", "--help"]})
+def docs():
+    """View package documentation."""
+    pass
+
+
+@docs.command()
+@click.argument('topic', default='index')
+def lsp(topic):
+    """View LSP documentation.
+
+    TOPIC: Documentation topic (default: index)
+
+    Topics:
+        index - LSP code navigation guide
+    """
+    # Find the docs directory
+    package_dir = Path(__file__).parent.parent
+    docs_dir = package_dir / "docs"
+
+    if topic == "index":
+        doc_file = docs_dir / "lsp-code-navigation.md"
+    else:
+        doc_file = docs_dir / f"{topic}.md"
+
+    if not doc_file.exists():
+        click.echo(f"❌ Documentation not found: {doc_file}", err=True)
+        click.echo(f"\nAvailable docs in {docs_dir}:")
+        for f in docs_dir.glob("*.md"):
+            click.echo(f"   • {f.stem}")
+        return 1
+
+    # Display the documentation
+    # Try to use bat for syntax highlighting, fall back to less/cat
+    if subprocess.run(["which", "bat"], capture_output=True).returncode == 0:
+        subprocess.run(["bat", "--style=plain", str(doc_file)])
+    elif subprocess.run(["which", "less"], capture_output=True).returncode == 0:
+        subprocess.run(["less", str(doc_file)])
+    else:
+        subprocess.run(["cat", str(doc_file)])
+
+    return 0
+
+
+@cli.command()
+def clean():
+    """Clean Neovim swap files.
+
+    Removes stale swap files from ~/.local/state/nvim/swap/
+    """
+    # Call the existing nvim-clean-swapfiles script
+    package_dir = Path(__file__).parent.parent
+    script = package_dir / "bin" / "nvim-clean-swapfiles"
+
+    if script.exists():
+        subprocess.run([str(script)])
+    else:
+        click.echo("❌ nvim-clean-swapfiles script not found", err=True)
+        return 1
+
+
+@cli.command()
+def tmux():
+    """Open Neovim in a tmux split.
+
+    Creates a new tmux pane and opens Neovim in it.
+    """
+    # Call the existing nvim-tmux script
+    package_dir = Path(__file__).parent.parent
+    script = package_dir / "bin" / "nvim-tmux"
+
+    if script.exists():
+        subprocess.run([str(script)])
+    else:
+        click.echo("❌ nvim-tmux script not found", err=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(cli())

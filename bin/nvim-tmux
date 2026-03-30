@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -o nounset -o pipefail -o errexit
+
+# nvim-tmux - Open file/dir in neovim in new tmux window
+
+show_help() {
+  cat <<EOF
+Usage: nvim-tmux [OPTIONS] [PATH]
+
+Open a file or directory in Neovim within a new tmux window.
+
+Options:
+  -h, --help     Show this help message and exit
+
+Arguments:
+  PATH           Path to file or directory (defaults to current directory)
+
+Examples:
+  nvim-tmux                     # Open current directory
+  nvim-tmux /path/to/file.txt   # Open specific file
+  nvim-tmux /path/to/directory  # Open directory
+
+Description:
+  Creates a new tmux window with Neovim in the top pane and a terminal
+  in the bottom pane. If opening a directory that contains README.md,
+  it will open that file. For regular files, it opens with Neotree.
+EOF
+}
+
+# Determine the target file or directory to open
+get_nvim_target() {
+  local path="$1"
+
+  # Default to current directory if no argument is provided
+  if [[ -z "$path" ]]; then
+    path="$(pwd)"
+  fi
+
+  # Get absolute path
+  local abspath=$(realpath "$path") || return 1
+
+  # Check if the path is a directory
+  if [[ -d "$abspath" ]]; then
+    # If README.md exists, use it; otherwise, use directory
+    if [[ -f "$abspath/README.md" ]]; then
+      echo "$abspath/README.md"
+    else
+      echo "$abspath"
+    fi
+  else
+    # It's a file
+    echo "$abspath"
+  fi
+}
+
+# Get window name for tmux based on target path
+get_window_name() {
+  local target="$1"
+  local filename
+
+  if [[ -d "$target" ]]; then
+    # If it's a directory, use the directory name
+    filename=$(basename "$target")
+  else
+    # If it's a file, use the file name
+    filename=$(basename "$target")
+
+    # Special case for README.md - use parent dir name
+    if [[ "$filename" == "README.md" ]]; then
+      local filedir=$(dirname "$target")
+      local parent_dir=$(basename "$filedir")
+
+      # If the parent dir is called 'tasks', include its parent too
+      if [[ "$parent_dir" == "tasks" ]]; then
+        local grandparent_dir=$(basename "$(dirname "$filedir")")
+        filename="${grandparent_dir}/${parent_dir}"
+      else
+        filename="$parent_dir"
+      fi
+    fi
+  fi
+
+  # Sanitize name for tmux
+  echo "${filename//[^a-zA-Z0-9]/_}"
+}
+
+nvim-tmux() {
+  local path=""
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -h | --help)
+      show_help
+      return 0
+      ;;
+    *)
+      path="$1"
+      shift
+      ;;
+    esac
+  done
+
+  # Get target to open in neovim
+  local nvim_target
+  nvim_target=$(get_nvim_target "$path")
+
+  # Get working directory
+  local filedir
+  if [[ -d "$nvim_target" ]]; then
+    filedir="$nvim_target"
+  else
+    filedir=$(dirname "$nvim_target")
+  fi
+
+  # Get window name
+  local winname
+  winname=$(get_window_name "$nvim_target")
+
+  # Build nvim command with Neotree
+  local nvim_cmd="nvim \"$nvim_target\" -c \"Neotree toggle\" -c \"Neotree focus\" -c \"wincmd p\""
+
+  # Create new window and split it
+  tmux new-window -n "$winname" -c "$filedir" "$nvim_cmd"
+  tmux split-window -v -l 10 -c "$filedir"
+  # Select the top pane (neovim) and ensure it has focus
+  tmux select-pane -t 1
+  # Send escape to ensure neovim has focus and is in normal mode
+  tmux send-keys -t 1 Escape
+}
+
+# Execute function if script is not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  nvim-tmux "$@"
+fi

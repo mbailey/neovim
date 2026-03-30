@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+
+# nvim-clean-swapfiles: A script to find and delete stale Neovim swap files
+
+set -e
+
+# Default location for Neovim swap files
+SWAP_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/swap//"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Print header
+echo -e "${BLUE}Neovim Swap File Cleaner${NC}"
+echo "--------------------------------"
+
+# Find all swap files
+mapfile -t SWAP_FILES < <(find "$SWAP_DIR" -type f -name "*.sw[a-p]" 2>/dev/null)
+
+# Check if any swap files were found
+if [ ${#SWAP_FILES[@]} -eq 0 ]; then
+    echo -e "${GREEN}No swap files found.${NC}"
+    exit 0
+fi
+
+# Print summary
+echo -e "${YELLOW}Found ${#SWAP_FILES[@]} swap file(s):${NC}"
+echo
+
+# Calculate total size
+TOTAL_SIZE=0
+
+# Create associative array to count files by directory
+declare -A DIR_COUNTS
+declare -A DIR_SIZES
+
+# Process each swap file
+for file in "${SWAP_FILES[@]}"; do
+    # Get file size in bytes
+    size=$(stat -c %s "$file" 2>/dev/null || stat -f %z "$file" 2>/dev/null)
+    TOTAL_SIZE=$((TOTAL_SIZE + size))
+    
+    # Extract directory path
+    dir_path=$(dirname "$(echo "$file" | sed 's|^/home/[^/]*/\.local/state/nvim/swap//||')")
+    
+    # Count files by directory
+    if [[ -n "${DIR_COUNTS[$dir_path]}" ]]; then
+        DIR_COUNTS[$dir_path]=$((DIR_COUNTS[$dir_path] + 1))
+        DIR_SIZES[$dir_path]=$((DIR_SIZES[$dir_path] + size))
+    else
+        DIR_COUNTS[$dir_path]=1
+        DIR_SIZES[$dir_path]=$size
+    fi
+done
+
+# Display summary by directory
+echo -e "${BLUE}Summary by directory:${NC}"
+echo "--------------------------------"
+for dir in "${!DIR_COUNTS[@]}"; do
+    # Get human-readable size
+    if command -v numfmt &>/dev/null; then
+        dir_human_size=$(numfmt --to=iec-i --suffix=B --format="%.1f" "${DIR_SIZES[$dir]}")
+    else
+        dir_human_size="$((DIR_SIZES[$dir] / 1024)) KB"
+    fi
+    
+    echo -e "${BLUE}Directory:${NC} $dir"
+    echo -e "${BLUE}Files:${NC} ${DIR_COUNTS[$dir]}"
+    echo -e "${BLUE}Size:${NC} $dir_human_size"
+    echo "--------------------------------"
+done
+
+# Calculate total human-readable size
+if command -v numfmt &>/dev/null; then
+    TOTAL_HUMAN_SIZE=$(numfmt --to=iec-i --suffix=B --format="%.1f" "$TOTAL_SIZE")
+else
+    TOTAL_HUMAN_SIZE="$((TOTAL_SIZE / 1024)) KB"
+fi
+
+echo -e "${YELLOW}Total size: ${TOTAL_HUMAN_SIZE}${NC}"
+echo
+
+# Ask for confirmation
+read -p "Do you want to delete these swap files? (y/N) " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Delete swap files
+    for file in "${SWAP_FILES[@]}"; do
+        if rm "$file"; then
+            echo -e "${GREEN}Deleted:${NC} $file"
+        else
+            echo -e "${RED}Failed to delete:${NC} $file"
+        fi
+    done
+    echo -e "${GREEN}Cleanup complete.${NC}"
+else
+    echo -e "${YELLOW}Operation cancelled. No files were deleted.${NC}"
+fi

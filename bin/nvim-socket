@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+set -o nounset -o pipefail -o errexit
+
+# nvim-socket - Discover and manage Neovim socket paths in tmux
+
+show_help() {
+  cat <<EOF
+Usage: nvim-socket <subcommand> [OPTIONS]
+
+Discover and manage Neovim socket paths in tmux panes.
+
+Subcommands:
+  list               List all Neovim sockets with context
+  find [PANE_ID]     Find socket for specific pane (or current pane)
+  show [PANE_ID]     Show detailed context for pane's Neovim instance
+  auto               Auto-select best socket based on priority
+
+Options:
+  -h, --help         Show this help message
+
+Examples:
+  nvim-socket list                  # List all Neovim sockets
+  nvim-socket find                  # Find socket for current pane
+  nvim-socket find 15               # Find socket for pane 15
+  nvim-socket show                  # Show context for current pane
+  nvim-socket auto                  # Auto-select best socket
+
+Socket Naming:
+  Sockets follow the pattern: /tmp/nvim-tmux-pane-{PANE_ID}
+  where PANE_ID is the tmux pane number (without % prefix)
+
+Priority for auto-selection:
+  1. Socket in current tmux pane
+  2. Socket in same window as current pane
+  3. Socket with matching working directory
+  4. Any available socket
+EOF
+}
+
+# Get current tmux pane ID (without % prefix)
+get_current_pane() {
+  tmux display-message -p "#{pane_id}" | sed 's/^%//'
+}
+
+# Get current tmux window index
+get_current_window() {
+  tmux display-message -p "#{window_index}"
+}
+
+# Get current working directory
+get_current_dir() {
+  pwd
+}
+
+# Get pane info: pane_id, window_index, pane_current_path, pane_current_command
+get_pane_info() {
+  local pane_id="$1"
+  tmux list-panes -a -F "#{pane_id} #{window_index} #{pane_current_path} #{pane_current_command}" \
+    | grep "^%${pane_id} " \
+    | sed 's/^%//'
+}
+
+# Extract socket pane ID from socket path
+get_socket_pane_id() {
+  local socket_path="$1"
+  basename "$socket_path" | sed 's/^nvim-tmux-pane-//'
+}
+
+# List all Neovim sockets with context
+list_sockets() {
+  local sockets=(/tmp/nvim-tmux-pane-*)
+
+  if [[ "${#sockets[@]}" -eq 0 ]] || [[ ! -e "${sockets[0]}" ]]; then
+    echo "No Neovim sockets found" >&2
+    return 1
+  fi
+
+  # Header
+  printf "%-10s %-8s %-30s %-15s\n" "PANE" "WINDOW" "PATH" "COMMAND"
+  printf "%-10s %-8s %-30s %-15s\n" "----" "------" "----" "-------"
+
+  for socket in "${sockets[@]}"; do
+    if [[ ! -S "$socket" ]]; then
+      continue
+    fi
+
+    local pane_id
+    pane_id=$(get_socket_pane_id "$socket")
+
+    local pane_info
+    pane_info=$(get_pane_info "$pane_id")
+
+    if [[ -n "$pane_info" ]]; then
+      read -r pid window_idx path command <<< "$pane_info"
+
+      # Truncate path if too long
+      local display_path="$path"
+      if [[ ${#display_path} -gt 30 ]]; then
+        display_path="...${display_path: -27}"
+      fi
+
+      printf "%-10s %-8s %-30s %-15s\n" "$pane_id" "$window_idx" "$display_path" "$command"
+    else
+      # Pane doesn't exist anymore
+      printf "%-10s %-8s %-30s %-15s\n" "$pane_id" "N/A" "N/A" "(stale)"
+    fi
+  done
+}
+
+# Find socket for a specific pane (or current pane)
+find_socket() {
+  local pane_id="${1:-}"
+
+  # Use current pane if not specified
+  if [[ -z "$pane_id" ]]; then
+    pane_id=$(get_current_pane)
+  fi
+
+  # Remove % prefix if present
+  pane_id="${pane_id#%}"
+
+  local socket_path="/tmp/nvim-tmux-pane-${pane_id}"
+
+  if [[ -S "$socket_path" ]]; then
+    echo "$socket_path"
+    return 0
+  else
+    echo "No socket found for pane ${pane_id}" >&2
+    return 1
+  fi
+}
+
+# Show detailed context for a pane's Neovim instance
+show_context() {
+  local pane_id="${1:-}"
+
+  # Use current pane if not specified
+  if [[ -z "$pane_id" ]]; then
+    pane_id=$(get_current_pane)
+  fi
+
+  # Remove % prefix if present
+  pane_id="${pane_id#%}"
+
+  local socket_path="/tmp/nvim-tmux-pane-${pane_id}"
+
+  if [[ ! -S "$socket_path" ]]; then
+    echo "No socket found for pane ${pane_id}" >&2
+    return 1
+  fi
+
+  local pane_info
+  pane_info=$(get_pane_info "$pane_id")
+
+  if [[ -z "$pane_info" ]]; then
+    echo "Pane ${pane_id} not found" >&2
+    return 1
+  fi
+
+  read -r pid window_idx path command <<< "$pane_info"
+
+  echo "Socket: $socket_path"
+  echo "Pane ID: $pane_id"
+  echo "Window: $window_idx"
+  echo "Directory: $path"
+  echo "Command: $command"
+
+  # Try to get current file from nvim if available
+  if command -v nvim >/dev/null 2>&1; then
+    local current_file
+    current_file=$(nvim --server "$socket_path" --remote-expr "expand('%:p')" 2>/dev/null || echo "(unable to query)")
+    echo "Current file: $current_file"
+  fi
+}
+
+# Auto-select best socket based on priority
+auto_select() {
+  local current_pane current_window current_dir
+  current_pane=$(get_current_pane)
+  current_window=$(get_current_window)
+  current_dir=$(get_current_dir)
+
+  local sockets=(/tmp/nvim-tmux-pane-*)
+
+  if [[ "${#sockets[@]}" -eq 0 ]] || [[ ! -e "${sockets[0]}" ]]; then
+    echo "No Neovim sockets found" >&2
+    return 1
+  fi
+
+  # Priority 1: Socket in current pane
+  local socket_path="/tmp/nvim-tmux-pane-${current_pane}"
+  if [[ -S "$socket_path" ]]; then
+    echo "$socket_path"
+    return 0
+  fi
+
+  # Priority 2: Socket in same window
+  for socket in "${sockets[@]}"; do
+    if [[ ! -S "$socket" ]]; then
+      continue
+    fi
+
+    local pane_id
+    pane_id=$(get_socket_pane_id "$socket")
+
+    local pane_info
+    pane_info=$(get_pane_info "$pane_id")
+
+    if [[ -n "$pane_info" ]]; then
+      read -r pid window_idx path command <<< "$pane_info"
+
+      if [[ "$window_idx" == "$current_window" ]]; then
+        echo "$socket"
+        return 0
+      fi
+    fi
+  done
+
+  # Priority 3: Socket with matching working directory
+  for socket in "${sockets[@]}"; do
+    if [[ ! -S "$socket" ]]; then
+      continue
+    fi
+
+    local pane_id
+    pane_id=$(get_socket_pane_id "$socket")
+
+    local pane_info
+    pane_info=$(get_pane_info "$pane_id")
+
+    if [[ -n "$pane_info" ]]; then
+      read -r pid window_idx path command <<< "$pane_info"
+
+      if [[ "$path" == "$current_dir" ]]; then
+        echo "$socket"
+        return 0
+      fi
+    fi
+  done
+
+  # Priority 4: Any available socket (first valid one)
+  for socket in "${sockets[@]}"; do
+    if [[ -S "$socket" ]]; then
+      echo "$socket"
+      return 0
+    fi
+  done
+
+  echo "No valid Neovim sockets found" >&2
+  return 1
+}
+
+# Main command dispatcher
+main() {
+  if [[ $# -eq 0 ]]; then
+    show_help
+    exit 1
+  fi
+
+  local subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    list)
+      list_sockets "$@"
+      ;;
+    find)
+      find_socket "$@"
+      ;;
+    show)
+      show_context "$@"
+      ;;
+    auto)
+      auto_select "$@"
+      ;;
+    -h|--help|help)
+      show_help
+      exit 0
+      ;;
+    *)
+      echo "Unknown subcommand: $subcommand" >&2
+      echo "Run 'nvim-socket --help' for usage information" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Execute if script is not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

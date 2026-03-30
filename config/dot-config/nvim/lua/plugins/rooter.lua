@@ -1,0 +1,31 @@
+-- Commented out to disable auto-changing to project root directory
+-- return {
+--   {
+--     "ahmedkhalf/project.nvim",
+--     event = "VeryLazy",
+--     opts = {
+--       -- Your custom configuration
+--       detection_methods = { "pattern" },
+--       patterns = { ".git", "_darcs", ".hg", ".bzr", ".svn", "Makefile", "package.json" },
+--       -- Change to the directory when the file is opened
+--       silent_chdir = true,
+--       -- Show a notification when changing directories
+--       show_on_dirs = false,
+--       scope_chdir = "global",
+--     },
+--     config = function(_, opts)
+--       require("project_nvim").setup(opts)
+--       
+--       -- Optional: Add an autocmd to change directory when opening a file
+--       vim.api.nvim_create_autocmd({ "BufEnter" }, {
+--         callback = function()
+--           local project_path = require("project_nvim.project").get_project_root()
+--           if project_path then
+--             vim.cmd("cd " .. project_path)
+--           end
+--         end,
+--       })
+--     end,
+--   },
+-- }
+return {}

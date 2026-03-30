@@ -1,0 +1,8 @@
+alias vim=nvim
+alias vi=nvim
+alias v='nvim .'
+
+alias nvt=nvim-tmux
+
+# Now keeping it in mt-public/neovim/config
+# alias lazyvim-install='git clone https://github.com/LazyVim/starter ~/.config/nvim-lazy'

@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+
+# neovim-install
+
+# I'm not using packer anymore ai!
+
+show_help() {
+    echo "Usage: $(basename "$0") [-v|--verbose] [-s|--from-source] [-h|--help]"
+    echo
+    echo "Options:"
+    echo "  -v, --verbose    Show more detailed output"
+    echo "  -s, --from-source  Compile and install from source instead of using package manager"
+    echo "  -h, --help       Show this help message"
+    exit 0
+}
+
+# Process command line arguments
+verbose=0
+from_source=0
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -v|--verbose)
+            verbose=1
+            shift
+            ;;
+        -s|--from-source)
+            from_source=1
+            shift
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+compile_nvim_from_source() {
+    echo "Compiling Neovim from source..."
+    
+    # Install build dependencies
+    if command -v dnf >/dev/null; then
+        sudo dnf groupinstall -y "Development Tools"
+        sudo dnf install -y cmake gcc-c++ libtool ninja-build unzip gettext-devel
+    elif command -v apt-get >/dev/null; then
+        sudo apt-get install -y ninja-build gettext cmake unzip curl
+    else
+        echo "Unable to install build dependencies. Please install them manually." >&2
+        exit 1
+    fi
+
+    # Create temporary build directory
+    local build_dir
+    build_dir=$(mktemp -d)
+    cd "$build_dir" || exit 1
+
+    # Clone and build
+    git clone --depth=1 --branch stable https://github.com/neovim/neovim
+    cd neovim || exit 1
+    make CMAKE_BUILD_TYPE=RelWithDebInfo
+    sudo make install
+
+    # Cleanup
+    cd || exit 1
+    rm -rf "$build_dir"
+}
+
+install_nvim() {
+    local os_type
+    os_type=$(uname -s)
+
+    echo "Installing Neovim..."
+    case "$os_type" in
+        Linux)
+            if [ "$from_source" -eq 1 ]; then
+                [ "$verbose" -eq 1 ] && echo "Installing from source as requested..."
+                compile_nvim_from_source
+            elif command -v apt-get >/dev/null; then
+                sudo apt-get update
+                sudo apt-get install -y neovim
+            elif command -v dnf >/dev/null; then
+                if grep -q "Amazon Linux" /etc/os-release; then
+                    [ "$verbose" -eq 1 ] && echo "Amazon Linux detected, compiling from source..."
+                    compile_nvim_from_source
+                else
+                    sudo dnf install -y neovim
+                fi
+            else
+                echo "Unsupported Linux distribution - attempting to compile from source..." >&2
+                compile_nvim_from_source
+            fi
+            ;;
+        Darwin)
+            if ! command -v brew >/dev/null; then
+                echo "Homebrew is required on macOS. Please install it first." >&2
+                exit 1
+            fi
+            brew install neovim
+            ;;
+        *)
+            echo "Unsupported operating system: $os_type" >&2
+            exit 1
+            ;;
+    esac
+}
+
+
+install_dependencies() {
+    local os_type
+    os_type=$(uname -s)
+
+    echo "Installing dependencies..."
+    case "$os_type" in
+        Linux)
+            if command -v apt-get >/dev/null; then
+                # Dependencies for treesitter and common development tools
+                sudo apt-get install -y git curl build-essential
+            elif command -v dnf >/dev/null; then
+                sudo dnf install -y git curl gcc gcc-c++ make
+            fi
+            ;;
+        Darwin)
+            brew install git curl gcc make
+            ;;
+    esac
+}
+
+main() {
+    if [ "$from_source" -eq 1 ]; then
+        [ "$verbose" -eq 1 ] && echo "Installing from source as requested..."
+        install_nvim
+    elif ! command -v nvim >/dev/null; then
+        install_nvim
+    else
+        [ "$verbose" -eq 1 ] && echo "Neovim already installed"
+    fi
+
+    install_dependencies
+
+    echo "Installation complete!"
+    echo "Next step:"
+    echo "Run 'nvim-config' to set up your Neovim configuration"
+}
+
+# Execute main function
+main
