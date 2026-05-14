@@ -80,3 +80,24 @@ vim.api.nvim_create_user_command("StripCR", function()
   vim.cmd([[silent! %s/\r//g]])
   vim.notify("Carriage returns removed", vim.log.levels.INFO)
 end, {})
+
+-- :DiffOrig -- show diff between the current buffer (in-memory) and the file on disk.
+-- Useful when nvim asks "save changes to X?" and you want to see what changed
+-- before deciding. Standard recipe from :h DiffOrig (not installed by default).
+--
+-- Usage: when prompted "save changes?", press `c` (cancel), then run `:DiffOrig`.
+-- Decide with `:wq` (save) or `:q!` (discard). Close the diff split with `<C-w>q`
+-- in the scratch buffer.
+vim.api.nvim_create_user_command("DiffOrig", function()
+  vim.cmd("vert new")
+  vim.bo.buftype = "nofile"
+  vim.bo.bufhidden = "wipe"
+  vim.cmd("read ++edit #")
+  vim.cmd("0d_")
+  vim.cmd("diffthis")
+  vim.cmd("wincmd p")
+  vim.cmd("diffthis")
+end, { desc = "Diff buffer against on-disk version" })
+
+-- Keymap: <leader>do -- run DiffOrig with one keystroke.
+vim.keymap.set("n", "<leader>do", "<cmd>DiffOrig<cr>", { desc = "Diff buffer vs disk (DiffOrig)" })
