@@ -1,3 +1,9 @@
 # Packer compiled output
 config/dot-config/nvim/plugin/packer_compiled.lua
 config/dot-config/nvim/lazy-lock.json
+
+# Stray nvim temp dir (do not track)
+config/dot-config/nvim/tmp/
+
+# Old config kept locally for reference, not for publishing
+neovim-old/
